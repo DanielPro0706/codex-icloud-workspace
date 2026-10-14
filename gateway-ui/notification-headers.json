@@ -1,0 +1,5 @@
+{
+  "Content-Security-Policy": "default-src 'none'; script-src 'sha256-MAe6hRRiCKtDHHsymGlf3V8rkEhC2X4ftf4VhS+m9u0='; style-src 'sha256-h+6y6/lbWDT0x5xKK9Kzg58mjcDcIv5Xkn/kk71MTe8='; img-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff"
+}

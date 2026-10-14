@@ -1,0 +1,38 @@
+# 五项能力与验收记录
+
+核对日期：2026-10-14。依据原交接及真实命令、发布 UI、原生文件 SHA、本人设备确认。公开版只记录脱敏结论；不上传私人目录清单、账户、环境 ID、聊天记录、截图或原始认证日志。
+
+## 原五项目标
+
+| 目标 | 已有实测 | 开源前复查 | 边界 |
+|---|---|---|---|
+| 官方 Cloud 浏览/搜索整个 iCloud、下载、mkdir、新建和修改覆盖 | Cloud 根目录读取，完整 PDF 检索，隔离新目录、新文件和备份后覆盖 | 普通 Cloud `gateway.py check` exit 0，认证 PASS；activate exit 0，目录完整且下载 0 | 这次是只读回归，未重复写回；读权限不能证明写权限 |
+| Mac 不作为中转，Cloud Linux 处理/编译中文 | 真正 Linux XeLaTeX + Noto CJK 编译并上传 | doctor 的 Python/XeLaTeX/Noto 检查均通过 | 没有物理关闭 Mac 试验；Linux 不运行 Xcode |
+| Mac/Cloud 可移植 Skills 同步、默认文件夹无需设置 prompt | Mac 后台自主发布测试版本，Cloud 普通请求导入且 SHA 匹配；普通新聊天首句完成默认绑定 | Mac 最新状态 ok、服务 checkout 干净；当前 Cloud index/import/guidance 检查通过 | guidance-index，不保证原生 selector 注册；凭据/插件运行时不复制 |
+| 手机提醒、SSH 与 Apple 2FA 恢复 | 本人确认手机通知，Termius 登录，status 与 reconnect 成功 | 四个 ECS 服务/定时器 active；最近 health OK、mail ready、健康事件记录成功 | 本次未发新提醒，未强制 Apple session 过期；服务接受不等于设备送达 |
+| Cloud 写回自然同步 Mac/iPhone/iPad、冲突拒绝 | Cloud tex/pdf/文本与 Mac 原生 SHA 相同；本人确认手机和平板能打开 PDF；旧控制器拒绝冲突写入 | 三个既有 Mac 文件再次核对 SHA 均匹配 | 最终一致性；本次没有重新写这三个文件；不是自动合并/原子锁 |
+
+后续维护环境已通过官方 UI 发布，并在普通新任务中验证。旧 failed/offline 实例没有被宣称修复。五项能力有上述证据；仍需保留表中未做过的边界。
+
+## 公开源码验证
+
+- Python：67 项测试全部通过，包括未启用邮件时绝不调用 CLI、固定收件人/确认参数、哈希/备份/冲突、按需 fetch、来源锁定、快照导入和8项 gitleaks 同步测试。
+- Go helper：`go test -mod=readonly ./...` 通过；模块校验、跨编译另见发布验证 JSON。
+- 原部署的 Cloud 维护验证：66 项收集，58 通过、8 跳过（当时 Linux 缺少 Mac 测试路径的扫描器）；Go module/test/build 通过。该数字属于原运行版，不与公开版67项混用。
+- 公开模板与原运行版的差异仅为脱敏/部署占位符、邮件默认关闭及测试扫描器入口、公开文档与历史工具保护；没有新增无服务器路径。
+
+自动测试不使用真实 iCloud 或真实收件人。完整测试中若缺少 gitleaks 会跳过8项，不能把它报告为全项通过。
+
+## 自己部署后的验收顺序
+
+1. 服务器以专用用户实际 rclone 根目录读取；记录退出码，不记录 Apple 配置。
+2. 私网 TLS 和正确 Basic 下 PROPFIND 成功；错误/缺少密钥失败。浏览器本人 owner 身份的读取和限定 POST 单独测，写入仍须密钥。
+3. 明确授权一个新的 UUID 隔离测试目录：mkdir、上传、下载、比对 SHA；仅对自己的精确测试文件执行 Trash。不递归删除父目录。
+4. 网页选中目录，普通 Cloud 新聊天首句问文件，确认来自远程且未批量下载；旧聊天绑定不变。
+5. 在 Cloud 生成可检查内容（如一页中文 LaTeX）、实际编译并上传；在 Mac 原生 iCloud 路径核对 SHA，在 iPhone/iPad 文件 App 打开。
+6. 两个控制器读取 A，第一上传 B，第二尝试基于旧 A 上传 C，必须在写入前拒绝；保留远端 B、旧版备份和本地 C。
+7. Mac 合成 Skill 改动由后台自动发布；Cloud 普通任务刷新并核对 SHA。不要用手动推送代替这项验收。
+8. 本人启用提醒并发送测试，确认实际到达；本人手机登录并运行 reconnect，核对根读和恢复健康。若未做过会话过期全链路，明确标注未测。
+9. 维护准备全部结束后发布一次，官方成功后再用普通任务验证。保留失败实例和既有文件。
+
+`deployment/reference/isolated-test.py`、`webdav-isolated-test.py` 是真实写入测试，必须明确授权后运行；CI 不运行它们。

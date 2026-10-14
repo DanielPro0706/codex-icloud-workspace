@@ -1,0 +1,32 @@
+[Unit]
+Description=Private iCloud folder selection for future Cloud tasks
+After=icloud-gateway-webdav.service
+Wants=icloud-gateway-webdav.service
+[Service]
+Group=icloud-gateway
+RuntimeDirectory=icloud-gateway-picker
+RuntimeDirectoryMode=0750
+Environment=ICLOUD_BROWSER_IDENTITY=1
+DynamicUser=yes
+User=icloud-picker
+EnvironmentFile=/home/icloud-gateway/.config/icloud-gateway/webdav.env
+StateDirectory=icloud-gateway-picker
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 /opt/icloud-gateway/ui/selection_api.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=128M
+[Install]
+WantedBy=multi-user.target

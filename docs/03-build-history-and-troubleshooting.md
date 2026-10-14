@@ -1,0 +1,48 @@
+# 构建经过与实际踩坑
+
+本记录主要整理自部署交接文档，再用最新源码、现网状态和维护发布验收更新。原交接包含个人地址、账户与实例标识，未直接上传。这里只保留可复用过程和确实观察到的结论。
+
+## 实际建设顺序
+
+1. **先走通 Apple 后端。** 官方 rclone 遇到中国区重定向；核对上游 PR，隔离构建候选版，完成本人认证及根目录读取。原官方程序保留。
+2. **再建立私有传输。** ECS 上 WebDAV 只绑定 loopback，Tailscale userspace Serve 提供 HTTPS。独立网关密钥与 Apple session 分离。先做 UUID 隔离文件的上传、下载、SHA 和 Trash 验收。
+3. **加入手机网页。** 使用 rclone HTML 模板显示目录，selection API 将选择保存在服务器。新增聊天读取选择并一次绑定；旧聊天不随页面切换。
+4. **分开浏览器身份与写入身份。** 最终代理通过 Unix socket 与 Linux peer credentials 信任 Tailscale Serve，读取固定本人 LoginName；浏览器只开放读取和限定 POST，WebDAV 写仍需 Basic。
+5. **加入提醒和手机恢复。** health timer 从早期每日两次调整为每15分钟；固定邮件、Web Push 按事件去重；手机公钥登记和交互式 reconnect 带备份。本人确认通知、SSH 和 Apple 恢复。
+6. **实现真正 Cloud 工作。** 全盘列举、限定目录完整检索、mkdir、按需下载、中文 XeLaTeX 编译、新建和覆盖均在官方 Cloud Linux 执行；本地 Mac 只观察原生同步结果。
+7. **解决可复用上下文。** Mac 导出/扫描/推送 private snapshot，Cloud 安全快进与导入。运行时没有 FUSE、平台 Skills 目录只读，最终采用根指引和 Skill 索引。
+8. **区分单实例通过与环境发布。** 旧维护草稿有 executor 错误、VPN enrollment 错误和冻结发布问题。后续获授权使用新环境，完成基线发布；普通新聊天首次文件问题及后续刷新通过。旧失败实例保留，未声称已修复。
+9. **公开前复核。** 用实际运行源码整理公开版本，重跑合成测试；现网检查、普通 Cloud 只读回归、Mac 后台状态及既有同步文件 hash 再次核对。没有为了开源强制过期 Apple 授权或重写用户文件。
+
+## 症状、证据和处理边界
+
+| 症状 | 本例观察 | 已采用的处理 / 不应推断 |
+|---|---|---|
+| rclone 302、domainToUse、iCloud.com.cn | 官方构建无法完成该中国区链路 | PR #9399 加地区 OAuth 修正，经测试后使用独立候选程序；不能泛化为所有账户密码错误 |
+| 412 web data access disabled | Apple 网页访问/设备批准未完成 | 本人在账户和受信任设备完成批准；不要求普遍关闭高级数据保护 |
+| 浏览器能打开，Cloud 仍 401 | 浏览器 owner 身份与 Basic 密钥是两条路径 | 分别查网络与认证；不扩大浏览器免登录为写权限 |
+| 写入 403/read-only | 早期服务存在只读限制 | 在明确写回授权后审阅具体 unit，保留备份，移除相关限制并只重启网关，再做隔离写入；不能只看根列表 |
+| Cloud 找不到文件 / 列出源码仓库 | 默认目录绑定或根指引缺失 | 普通文件请求先 activate，按远程条目回答；不是把整个盘预先复制到环境 |
+| 大视频/Keynote/凭据文件阻断 checkout | 全文件夹下载不适合日常需求 | 默认改元数据激活和按需 fetch；未下载文件不等于不存在 |
+| `/dev/fuse` 不存在 | 不能在该 Cloud VM 做 live mount | 保留按需工作区，不承诺实时 POSIX 文件系统 |
+| `.agents`、HOME 只读 | 原生 Skills 安装路径由平台管理 | 仓库内物化、根 AGENTS + metadata index；不改平台目录 |
+| 同一路径在不同执行视图权限不同 | 授权网络执行视图可能更宽 | bootstrap 仍强制 guidance-only，避免偶然可写导致越界 |
+| Git proxy connection 失败 | 普通 sandbox 路径失败，支持的授权网络路径曾成功 | 仅此网络分类允许同一命令重试一次；保持 CA/代理/VPN；认证、hash、脏工作树错误不升级绕过 |
+| Mac 同步 `blocked` | 曾无法确认 private 仓库；同期 Git TLS 失败 | 后续实测恢复 `ok`，不绕过 private 检查；历史失败不假定唯一根因 |
+| `draft_not_editable` | 发布后的 setup 被冻结 | 使用保存环境的 Edit 入口继续维护；发布记录不是永久执行会话 |
+| `failed to query executor configuration capabilities` | runtime context failed，但状态也曾 pending/offline、failure null | 根因未确认；不能把 pending 当活任务，不能凭相似 Issue 宣称修复 |
+| VPN enrollment / command_failed | 某些新实例启动失败 | 分别检查保存配置与当前 executor 的有效配置；不猜密钥过期、不反复撤销密钥 |
+| 设置保存，但发布失败/仍用旧版 | 草稿、准备文件系统、发布版本、当前实例不同 | 停止并发命令，审阅保存版本后只发布一次；等官方结果，再验收普通新任务 |
+| 手机网页/SSH 不通，别的设备正常 | 既有手机 VPN 的 TUN 排除和路由影响 tailnet | 本例修正针对 tailnet 的路由后通过；不要复制他人配置或关闭整套 VPN |
+| push 返回 2xx，但手机没弹通知 | 服务接受与设备显示不同 | 核对主屏幕 Web App、通知权限、订阅状态并由本人确认实际到达 |
+| 两个聊天改同一文件 | A 基线过期后准备覆盖 B | 写前 hash 检查拒绝并保留本地 C；不会自动合并，也没有原子锁 |
+
+## 不把观察升级为保证
+
+- 物理关闭 Mac 的完整测试没有执行；经验证的编译/写回在 Linux，文件链路不经过 Mac，Mac 只用于源 Skills 的更新和原生同步观察。
+- 没有故意使 Apple session 过期再完整跑“异常提醒→本人恢复→恢复提醒”；已有静态分类/去重测试、真实通知确认和独立 reconnect 成功。
+- 一个正常新聊天通过不保证平台以后没有故障；短暂平台错误不授权删除环境或重建全部基础设施。
+- 写前检查与备份降低冲突风险，但远端其它设备仍可能在检查后改动。不能声称 HTTP 条件头已建立跨 iCloud 原子锁。
+- 不自动传播删除。明确获准的单文件清理使用已核对 backend 的 Trash 语义；不 purge、不递归清理测试父目录。
+
+所有恢复都保留原文件、备份和未知副本。没有明确目的和范围时，不把失败日志当作扩大权限或替换架构的理由。

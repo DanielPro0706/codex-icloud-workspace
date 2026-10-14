@@ -1,0 +1,25 @@
+.DS_Store
+__pycache__/
+*.pyc
+.env
+.env.*
+.auth/
+.secrets/
+backups/
+work/
+auth.json
+*.sqlite*
+*.db*
+*.pem
+*.key
+# Generated from the verified snapshot at environment setup.
+.agents/skills/*
+!.agents/skills/icloud-codex-gateway/
+
+.portable-state*.json
+
+# Never publish personal snapshots or runtime state from this public checkout.
+snapshot/
+*.log
+webpush-helper-linux-amd64
+.env.example.local

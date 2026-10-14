@@ -1,0 +1,9 @@
+[Unit]
+Description=Check iCloud authentication and notify on state changes
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=60s
+Persistent=true
+Unit=icloud-gateway-health.service
+[Install]
+WantedBy=timers.target

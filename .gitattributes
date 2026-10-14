@@ -1,0 +1,3 @@
+# Preserve reviewed upstream patch context and license text verbatim.
+deployment/patches/*.patch -whitespace
+licenses/* -whitespace

@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-14",
+  "edition": "verified-server-reference",
+  "public_template_fresh_server_end_to_end": "not_run",
+  "python": {
+    "collected": 67,
+    "passed": 67,
+    "skipped": 0,
+    "command": "GITLEAKS_BIN=<installed-scanner> python3 -m unittest discover -s tests"
+  },
+  "go": {
+    "module_verification": "passed",
+    "unit_tests": "passed",
+    "linux_amd64_cross_compile": "passed"
+  },
+  "static": {
+    "python_syntax": "passed",
+    "shell_syntax": "passed",
+    "relative_markdown_links": "passed",
+    "both_page_csp_hashes": "passed",
+    "secret_scan": "passed",
+    "private_identifier_scan": "passed"
+  },
+  "live_read_only_regression": {
+    "ecs_services_and_timer": "active",
+    "latest_health": "OK",
+    "mac_background_sync": "ok",
+    "mac_service_checkout_clean": true,
+    "cloud_webdav": "PASS",
+    "cloud_activation_downloaded_files": 0,
+    "cloud_dependencies": "all_checks_passed",
+    "existing_native_mac_artifact_hashes": {
+      "tex": true,
+      "pdf": true,
+      "text": true
+    }
+  },
+  "not_repeated": [
+    "fresh_iCloud_writeback",
+    "physical_Mac_shutdown",
+    "forced_Apple_session_expiry",
+    "new_phone_notification_delivery",
+    "fresh_account_full_install"
+  ],
+  "privacy": "Only sanitized summaries are published; personal evidence and snapshots are excluded."
+}

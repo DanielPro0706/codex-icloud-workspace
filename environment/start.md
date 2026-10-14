@@ -1,0 +1,17 @@
+# Codex Cloud startup
+
+Use the existing `/workspace/codex-portable` checkout. Read `/workspace/AGENTS.md`, the repository `AGENTS.md`, and the portable owner guidance. Do not create a worktree unless explicitly requested.
+
+At the start of an ordinary task, run `python3 /workspace/codex-portable/scripts/cloud_refresh.py`. It fast-forwards only the trusted clean repository, retains prior versions, and imports verified Skills. Do not run the full Python/Go suite or rebuild tools for an ordinary file request. Routine Skills and instruction changes travel through this refresh; they do not each require republishing the environment.
+
+Before network work, read the available Cloud runtime Skill through its advertised catalog/resource. Do not guess a path or search all of `/` for an unavailable Skill. If it is absent, consult `environment/maintenance.md` and the actual execution-tool schema. For `network-path-unavailable` only, retry the same bounded command once using the tool's supported normal approval flow. Preserve inherited proxy/CA/VPN and credential placeholders. Authentication, policy, filesystem and local-edit failures do not authorize that retry. Never invent parameters, bypass TLS/proxy, or change network permissions to make a check pass.
+
+Read the verified names/descriptions/paths in `/workspace/.codex-portable-skills.json`, then the relevant `SKILL.md`. This is guidance-based discovery, not native selector registration; do not write platform-managed `.agents` or active `config.toml`.
+
+For iCloud tasks, read the repository's `icloud-codex-gateway/SKILL.md` and run `gateway.py check`. Require actual authenticated WebDAV success. For a file request without an explicit folder, run `workspace.py activate` and answer from the remote entries; do not substitute the configuration repository's files. Existing chats retain their binding and local edits. Explicit other-folder/whole-drive requests override the default scope through the gateway. Fetch only needed files. Plan, check conflicts, preserve backups and verify hashes for specifically authorized writes; no recursive deletion, purge or unapproved Trash operations.
+
+Use `python3 scripts/cloud_doctor.py` for a read-only local integrity check when diagnosing problems; add `--gateway` for the bounded authenticated read check. Local integrity passing is not a connectivity or writeback claim. Missing runtime readiness is not proof that a saved credential is wrong.
+
+The prepared image includes Python, XeLaTeX/Noto CJK and Go under `/workspace/tools/go/bin`. For Go development only, use `PATH=/workspace/tools/go/bin:/workspace/tools/bin:$PATH`, `GOCACHE=/workspace/.cache/go-build`, `GOPATH=/workspace/.cache/gopath`, `GOTOOLCHAIN=local`. ECS services stay on ECS; do not start public substitutes.
+
+Maintenance follows `environment/maintenance.md`: use the saved **Codex Cloud → Edit** flow, finish edits and checks before publishing once, then verify in a normal task. Treat the published setup chat as a release record. Do not continue modifying or running checks in it, and do not publish concurrently with commands. Keep all old environments, chats, files and backups. New chats/instances do not transfer another chat's unsaved work.

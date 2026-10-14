@@ -1,0 +1,19 @@
+[Unit]
+Description=Read-only iCloud authentication health check
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+User=icloud-gateway
+Group=icloud-gateway
+ExecStart=/usr/bin/python3 /usr/local/libexec/icloud-gateway-health.py
+Environment=XDG_CACHE_HOME=/var/cache/icloud-gateway
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/icloud-gateway/.config/rclone /home/icloud-gateway/.local/state/icloud-gateway /var/cache/icloud-gateway /home/icloud-gateway/.local/share/agently-cli
+PrivateTmp=yes
+PrivateDevices=yes
+TimeoutStartSec=180
+MemoryMax=256M

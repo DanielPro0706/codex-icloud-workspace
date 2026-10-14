@@ -1,0 +1,1 @@
+{"id": "/__codex_gateway_v1__/workspace", "name": "iCloud 文件工作区", "short_name": "iCloud 工作区", "start_url": "/__codex_gateway_v1__/notifications", "scope": "/", "display": "standalone", "background_color": "#f5f7fa", "theme_color": "#1265e7", "lang": "zh-CN", "icons": [{"src": "/__codex_gateway_v1__/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}
