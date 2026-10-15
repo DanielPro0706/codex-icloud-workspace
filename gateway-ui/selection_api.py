@@ -4,12 +4,14 @@ import base64,datetime,hmac,json,os,pathlib,threading,uuid,urllib.request,urllib
 from http.server import BaseHTTPRequestHandler,HTTPServer
 from socketserver import ThreadingMixIn
 from notifications import NotificationStore
+from uploads import UploadStore,WebDAVBackend,handle as handle_upload
 ORIGIN='https://gateway.example.ts.net'
 STATE=pathlib.Path(os.environ.get('STATE_DIRECTORY','/var/lib/icloud-gateway-picker'))/'selection.json'
 AUTH='Basic '+base64.b64encode((os.environ['RCLONE_USER']+':'+os.environ['RCLONE_PASS']).encode()).decode()
 LOCK=threading.Lock()
 NOTIFICATIONS=NotificationStore(STATE.parent,os.environ.get('ICLOUD_WEBPUSH_HELPER','/opt/icloud-gateway/ui/webpush-helper'))
 ASSETS=pathlib.Path(__file__).resolve().parent
+UPLOADS=UploadStore(STATE.parent/'uploads',WebDAVBackend(AUTH))
 
 def current():
  if STATE.exists():return json.loads(STATE.read_text())
@@ -49,12 +51,13 @@ class Handler(BaseHTTPRequestHandler):
  def allowed(self):
   if not hmac.compare_digest(self.headers.get('Authorization','').encode('utf-8'),AUTH.encode('ascii')):
    self.send_response(401);self.send_header('WWW-Authenticate','Basic realm=""');self.send_header('Content-Length','0');self.end_headers();return False
-  if self.route() not in ['/selection','/notifications','/notifications/config','/notifications/status','/notifications/subscribe','/notifications/unsubscribe','/notifications/test','/health-event']:
+  if self.route() not in ['/selection','/notifications','/notifications/config','/notifications/status','/notifications/subscribe','/notifications/unsubscribe','/notifications/test','/health-event','/uploads'] and not self.route().startswith('/uploads/'):
    self.reply(404,{'error':'not found'});return False
   return True
  def do_GET(self):
   if self.asset():return
   if not self.allowed():return
+  if handle_upload(self,UPLOADS):return
   try:
    route=self.route()
    if route=='/selection':
@@ -69,6 +72,7 @@ class Handler(BaseHTTPRequestHandler):
   except Exception as e:self.reply(503,{'error':type(e).__name__})
  def do_POST(self):
   if not self.allowed():return
+  if handle_upload(self,UPLOADS):return
   origin=self.headers.get('Origin')
   if origin and origin!=ORIGIN:self.reply(403,{'error':'wrong origin'});return
   if self.headers.get('Content-Type','').split(';')[0]!='application/json':self.reply(415,{'error':'JSON required'});return
@@ -95,6 +99,9 @@ class Handler(BaseHTTPRequestHandler):
   except urllib.error.HTTPError as e:self.reply(502,{'error':'iCloud directory validation failed','upstream_status':e.code})
   except (ValueError,KeyError):self.reply(400,{'error':'invalid selection request'})
   except Exception as e:self.reply(503,{'error':type(e).__name__})
+ def do_PUT(self):
+  if not self.allowed():return
+  if not handle_upload(self,UPLOADS):self.reply(405,{'error':'method not allowed'})
  def do_OPTIONS(self):self.reply(403,{'error':'cross-origin access disabled'})
 class Server(ThreadingMixIn,HTTPServer):daemon_threads=True
 if __name__=='__main__':

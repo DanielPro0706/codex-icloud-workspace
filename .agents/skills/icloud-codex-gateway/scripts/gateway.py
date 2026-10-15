@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Private WebDAV client. No redirect, no delete, no secrets in argv or output."""
-import argparse,base64,fnmatch,hashlib,json,os,pathlib,socket,ssl,sys,urllib.request,urllib.parse,urllib.error,uuid,xml.etree.ElementTree as ET
+import argparse,base64,concurrent.futures,fnmatch,hashlib,json,os,pathlib,socket,ssl,sys,threading,time,urllib.request,urllib.parse,urllib.error,uuid,xml.etree.ElementTree as ET
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*args,**kwargs):return None
+
+class UploadSessionError(ValueError):
+ def __init__(self,state):
+  self.state=state.get('state');self.error=state.get('error');self.stage=state.get('stage')
+  super().__init__('Resumable upload stopped: '+json.dumps({key:state.get(key) for key in ('upload_id','state','stage','error')}))
 
 def relative(value):
  if value.startswith('/') or any(x in ('..','.') for x in value.split('/')) or '\\' in value or any(ord(x)<32 for x in value):raise ValueError('Use a relative path with no traversal or control characters')
@@ -17,11 +22,13 @@ class Gateway:
   if not self.authorization:
    if not self.user or not self.password:raise ValueError('Missing independent gateway credentials')
    self.authorization='Basic '+base64.b64encode((self.user+':'+self.password).encode()).decode()
-  self.client=urllib.request.build_opener(NoRedirect(),urllib.request.HTTPSHandler(context=ssl.create_default_context()))
- def req(self,method,path='',data=None,headers=None):
+  self.client=self.new_client()
+ def new_client(self):
+  return urllib.request.build_opener(NoRedirect(),urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+ def req(self,method,path='',data=None,headers=None,_client=None):
   h={'Authorization':self.authorization}
   h.update(headers or {})
-  return self.client.open(urllib.request.Request(self.base+relative(path),data=data,headers=h,method=method),timeout=45)
+  return (_client or self.client).open(urllib.request.Request(self.base+relative(path),data=data,headers=h,method=method),timeout=45)
  def listing(self,path='',depth='1'):
   with self.req('PROPFIND',path,data=b'<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getetag/></d:prop></d:propfind>',headers={'Depth':depth,'Content-Type':'application/xml'}) as r:
    if r.status!=207:raise ValueError('Server did not return a WebDAV multistatus')
@@ -29,6 +36,76 @@ class Gateway:
    if len(data)>4_000_000:raise ValueError('Directory response too large; use a narrower path')
   root=ET.fromstring(data)
   return [{'href':n.findtext('{DAV:}href'),'directory':n.find('.//{DAV:}collection') is not None,'bytes':n.findtext('.//{DAV:}getcontentlength')} for n in root.findall('{DAV:}response')]
+
+ def json_request(self,method,path,value=None):
+  data=None if value is None else json.dumps(value,sort_keys=True).encode()
+  with self.req(method,path,data=data,headers={'Content-Type':'application/json'}) as response:
+   raw=response.read(131073)
+   if len(raw)>131072:raise ValueError('Upload status response too large')
+   return json.loads(raw)
+
+ def upload(self,remote,payload,expected_sha256=None,headers=None,progress=None,resumable=False):
+  """Use bounded application chunks for large bodies; do not alter proxy/CA/VPN."""
+  if len(payload)>32*1024*1024:raise ValueError('Upload exceeds this client limit of 32 MiB')
+  if len(payload)<=65536 and not resumable:
+   with self.req('PUT',remote,data=payload,headers=headers or {'Content-Type':'application/octet-stream'}) as response:
+    if response.status not in (200,201,204):raise ValueError('Unexpected upload status')
+   return
+  prefix='__codex_gateway_v1__/uploads'
+  capability=self.json_request('GET',prefix)
+  if capability.get('protocol')!='resumable-upload-v1' or capability.get('chunk_bytes')!=32768 or capability.get('max_bytes')!=32*1024*1024:
+   raise ValueError('Gateway resumable upload capability unavailable; large upload not started')
+  sha=hashlib.sha256(payload).hexdigest()
+  intent={'remote':remote,'bytes':len(payload),'sha256':sha,'expected_sha256':expected_sha256}
+  intent['upload_id']=str(uuid.uuid5(uuid.NAMESPACE_URL,self.base+json.dumps(intent,sort_keys=True)))
+  session=self.json_request('POST',prefix,intent)
+  for key,value in intent.items():
+   if session.get(key)!=value:raise ValueError('Upload session intent mismatch')
+  upload_path=prefix+'/'+intent['upload_id'];chunk_size=capability['chunk_bytes']
+  count=(len(payload)+chunk_size-1)//chunk_size;received=session.get('received')
+  if not isinstance(received,list) or any(type(i) is not int or not 0<=i<count for i in received):
+   raise ValueError('Invalid upload session progress')
+  received=set(received);clients=threading.local();completed=len(received)
+  def send_chunk(index):
+   # Each worker owns its opener; no mutable HTTP handler is shared across threads.
+   if not hasattr(clients,'opener'):clients.opener=self.new_client()
+   block=payload[index*chunk_size:(index+1)*chunk_size]
+   with self.req('PUT',upload_path+'/chunks/'+str(index),data=block,
+                 headers={'Content-Type':'application/octet-stream'},_client=clients.opener) as response:
+    raw=response.read(4097)
+    if len(raw)>4096:raise ValueError('Chunk acknowledgement too large')
+    ack=json.loads(raw)
+   if ack.get('upload_id')!=intent['upload_id'] or ack.get('index')!=index or ack.get('bytes')!=len(block) or ack.get('sha256')!=hashlib.sha256(block).hexdigest():
+    raise ValueError('Chunk acknowledgement mismatch')
+  pool=concurrent.futures.ThreadPoolExecutor(max_workers=4)
+  futures=[pool.submit(send_chunk,index) for index in range(count) if index not in received]
+  try:
+   for future in concurrent.futures.as_completed(futures):
+    future.result();completed+=1
+    if progress and (completed%8==0 or completed==count):
+     progress({'phase':'chunks','completed':completed,'total':count,'upload_id':intent['upload_id']})
+  except BaseException:
+   for future in futures:future.cancel()
+   raise
+  finally:
+   # Let in-flight acknowledgements finish; never start commit after a failed part.
+   pool.shutdown(wait=True)
+  # An uncertain chunk/commit response is never blindly repeated. The stable ID
+  # permits a later user-authorized retry to inspect and reuse durable progress.
+  state=self.json_request('POST',upload_path+'/commit',{})
+  deadline=time.monotonic()+600;last=None
+  while True:
+   marker=(state.get('state'),state.get('stage'))
+   if progress and marker!=last:
+    progress({'phase':'commit','state':marker[0],'stage':marker[1],'upload_id':intent['upload_id']});last=marker
+   if state.get('state')=='verified':
+    if state.get('sha256')!=sha or state.get('bytes')!=len(payload):raise ValueError('Upload result mismatch')
+    return
+   if state.get('state') in ('conflict','failed'):
+    raise UploadSessionError(state)
+   if time.monotonic()>=deadline:raise TimeoutError('Upload still unconfirmed; retained session '+intent['upload_id'])
+   time.sleep(2)
+   state=self.json_request('GET',upload_path)
 
 def listed_path(g,href):
  u=urllib.parse.urlsplit(href);base=urllib.parse.urlsplit(g.base)
@@ -109,8 +186,13 @@ def main():
   print(json.dumps({'previous_version_backup':str(original),'sha256':a.expected_sha256}))
  if a.local.stat().st_size>32*1024*1024:raise ValueError('Upload exceeds this client limit of 32 MiB')
  b=a.local.read_bytes();digest=hashlib.sha256(b).hexdigest()
- with g.req('PUT',a.remote,data=b,headers=({'Content-Type':'application/octet-stream'} if existing else {'If-None-Match':'*','Content-Type':'application/octet-stream'})) as r:
-  if r.status not in (200,201,204):raise ValueError('Unexpected upload status')
+ upload_headers={'Content-Type':'application/octet-stream'} if existing else {'If-None-Match':'*','Content-Type':'application/octet-stream'}
+ if hasattr(g,'upload'):
+  g.upload(a.remote,b,a.expected_sha256 if existing else None,headers=upload_headers,
+           progress=lambda value:print(json.dumps({'upload_progress':value}),file=sys.stderr,flush=True))
+ else:
+  with g.req('PUT',a.remote,data=b,headers=upload_headers) as r:
+   if r.status not in (200,201,204):raise ValueError('Unexpected upload status')
  h=hashlib.sha256()
  with g.req('GET',a.remote) as r:
   while True:

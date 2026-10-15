@@ -21,6 +21,12 @@ class PolicyTests(unittest.TestCase):
    self.assertEqual(m.mode('GET','/',h,OWNER,BASIC,True),'unauthorized')
    h['Authorization']=BASIC
    self.assertEqual(m.mode('PROPFIND','/',h,OWNER,BASIC,True),'basic')
+ def test_upload_sessions_require_basic_even_for_browser_owner(self):
+  for method,path in [('GET',m.PREFIX+'/uploads'),('GET',m.PREFIX+'/uploads/example'),('POST',m.PREFIX+'/uploads'),('PUT',m.PREFIX+'/uploads/example/chunks/0')]:
+   h=headers(Tailscale_User_Login=OWNER)
+   self.assertEqual(m.mode(method,path,h,OWNER,BASIC,True),'unauthorized')
+   h['Authorization']=BASIC
+   self.assertEqual(m.mode(method,path,h,OWNER,BASIC,True),'basic')
  def test_browser_identity_cannot_write_webdav_or_health(self):
   h=headers(Tailscale_User_Login=OWNER,Origin=m.ORIGIN)
   for method,path in [('PUT','/file'),('DELETE','/file'),('PROPFIND','/'),('POST',m.PREFIX+'/health-event')]:

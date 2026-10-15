@@ -1,6 +1,6 @@
 # Codex iCloud Workspace
 
-通过私有 ECS 网关，把 iCloud Drive 用作官方 Codex Cloud 的文件工作区。手机选择目录，Cloud 按需下载、处理并经授权写回；Mac、iPhone、iPad 继续使用原生 iCloud 同步。服务器负责 Apple 授权健康检查与网页/邮件提醒，Mac 无需充当文件中转服务器。
+通过私有 ECS 网关，把 iCloud Drive 用作官方 Codex Cloud 的文件工作区。手机选择目录，Cloud 按需下载、处理，编辑和生成任务默认自动写回；Mac、iPhone、iPad 继续使用原生 iCloud 同步。服务器负责 Apple 授权健康检查与网页/邮件提醒，Mac 无需充当文件中转服务器。
 
 **本仓库只发布已经走通过的服务器版。** 没有无服务器实现，也没有以自建聊天网页替代官方 Cloud。这里公开实现、网页部署代码、构建补丁、测试、从零搭建流程及实际踩坑记录；个人数据、凭据、私有 Skills 快照和原私有仓库历史不公开。
 
@@ -14,6 +14,17 @@
 - [五项能力及验收边界](docs/04-verification.md)
 - [参考仓库、PR、Issue 与官方文档](docs/05-sources.md)
 - [公开代码范围与隐私边界](docs/06-publication-scope.md)
+- [分块续传、自动保存与已有部署升级](docs/07-automatic-save.md)
+
+## 自动保存与上传恢复
+
+- 普通“修改这里”“新建文件”“生成 PDF”请求就包含对应任务文件的写回，不需要再说“保存到原目录”。只查看文件不会产生新改动；明确不保存的要求优先。
+- 源文件稳定保存五秒后入队；PDF、图片和压缩包等生成文件在验证后按当前哈希发布。
+- 自动写回使用 32 KiB 分块续传、最多四个在途分块；队列一次处理一个文件。快照、备份、进度和回读 SHA-256 校验均保留。
+- 临时网络错误退避重试，远端冲突、授权错误或空间不足停止对应文件，不盲目覆盖。
+- 队列运行在 Cloud；环境休眠时暂停，同一保留工作区恢复后可继续。它不是全天候同步盘，也不能从新任务恢复另一台 VM 尚未上传的文件。
+
+这些行为已在原部署完成真实 Cloud 和原生 Mac iCloud 验收；公开模板仍需部署者按自己的账号、域名和运行环境重新验收。
 
 ## 工作链路
 
@@ -35,7 +46,7 @@ Mac Skills ── 扫描 + 私有 Git ── Cloud 启动刷新
 |---|---|
 | `gateway-ui/` | 文件网页、通知页、Service Worker、清单、图标、选择 API、Unix socket 鉴权代理、Go Web Push helper |
 | `gateway-runtime/` | Apple 健康检查、固定邮件通知、交互式重授权、手机公钥登记 |
-| `.agents/skills/icloud-codex-gateway/` | 网关 Skill、WebDAV 客户端、按需工作区、写回计划、备份与冲突检查 |
+| `.agents/skills/icloud-codex-gateway/` | 网关 Skill、WebDAV 客户端、按需工作区、自动保存队列、写回计划、备份与冲突检查 |
 | `scripts/` | 可移植快照、Mac 后台同步、安全快进、Cloud bootstrap/refresh/doctor |
 | `environment/` | 已验证的 Cloud 安装、启动和维护入口 |
 | `deployment/scripts/` | ECS 账户准备、rclone 中国区构建、私网 Tailscale 与 WebDAV 准备 |
@@ -57,7 +68,7 @@ go mod verify
 go test -mod=readonly ./...
 ```
 
-公开准备时 67 项 Python 测试全部通过；Go 测试通过。自动测试使用合成数据，不证明真实 Apple 授权、通知送达或跨设备同步；这些证据单独列在[验收记录](docs/04-verification.md)。
+新增自动保存与上传恢复后，公开版 99 项 Python 测试全部通过且无跳过，见[验收记录](docs/04-verification.md)。自动测试使用合成数据，不证明真实 Apple 授权、通知送达或跨设备同步；真实证据与公开模板测试分别记录。
 
 当前限制：非 POSIX 实时挂载；单文件上传上限 32 MiB；每次 fetch 默认上限 1,000 文件/256 MiB；写前 hash 检查不构成分布式原子锁；Cloud Linux 不运行 Xcode。Skills 通过指引和索引发现，不宣称注册进平台原生选择器。
 

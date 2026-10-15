@@ -115,6 +115,8 @@ cd ../..
 
 普通 UI 源文件权限 0644，目录 0755。最终 WebDAV unit 已带模板和 CSP 响应头；修改内联脚本/样式后，重新计算对应 SHA-256 Base64 并同步 `response-headers.json`、`notification-headers.json` 及 unit。不要为省事关闭 CSP。可参考已使用过的[网页部署代码](../deployment/reference/deploy-ui.py)，它包含备份、替换和 service 校验逻辑。
 
+当前 `selection_api.py` 依赖新增的 `uploads.py`，必须一起安装，`browser_proxy.py` 也须使用同版鉴权规则。已有部署按[增量升级顺序](07-automatic-save.md#已有部署升级顺序)保留真实参数和旧文件，再更新；历史参考脚本不保证包含新增模块。
+
 首次建立 picker 的状态目录时，先将其 unit 中 `Environment=ICLOUD_BROWSER_IDENTITY=1` 暂时设为 `0`，再 `daemon-reload`、启动 picker。确认 `/var/lib/icloud-gateway-picker` 存在后，建立 `browser-owner.json`：
 
 ```json

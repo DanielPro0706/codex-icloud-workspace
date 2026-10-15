@@ -41,7 +41,7 @@ def mode(method, path, headers, owner, basic, trusted):
             return 'forbidden'
     values = headers.get_all('Tailscale-User-Login') or []
     match = trusted and owner and len(values) == 1 and identity(values[0]) == owner
-    if match and method in ('GET', 'HEAD') and path != PREFIX + '/health-event':
+    if match and method in ('GET', 'HEAD') and path != PREFIX + '/health-event' and not (path == PREFIX + '/uploads' or path.startswith(PREFIX + '/uploads/')):
         return 'owner'
     if match and method == 'POST' and path in OWNER_POSTS and origins == [ORIGIN]:
         return 'owner'

@@ -111,7 +111,7 @@ python3 scripts/cloud_doctor.py --gateway
 
 ## 5. 日常处理与维护
 
-网关 Skill 里有真实 CLI 用法。默认工作流为 activate → list → fetch 所需文件 → Linux 工具处理 → plan → 核对授权和 plan hash → push。下载和写入大小限制见 README。明确要求全盘搜索时可扩大只读范围，不把默认目录误当永久权限上限。
+网关 Skill 里有真实 CLI 用法。默认工作流为 activate → list → fetch 所需文件 → 自动登记任务文件并启动保存队列 → Linux 工具处理 → 校验生成文件并标记 ready → 等待哈希验证完成。普通编辑、新建和生成请求就包含对应文件的写回，不需要另说“保存”；明确不保存的要求优先。人工 `plan` / `push` 保留用于审阅和恢复。下载和写入大小限制见 README。明确要求全盘搜索时可扩大只读范围，不把默认目录误当永久权限上限。新增协议的部署顺序及队列边界见[自动保存说明](07-automatic-save.md)。
 
 不要把已发布 setup 聊天当长期维护终端。后续工具/安装字段/VPN/凭据变更用同一保存环境的 Edit 流程；Skills 内容更新通过可信 Git refresh 获取。完成后再发布并验收普通任务。旧失败环境和文件保留；新环境通过不意味着旧实例恢复。
 

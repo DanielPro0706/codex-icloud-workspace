@@ -1,11 +1,27 @@
 #!/usr/bin/env python3
 """Scoped iCloud folder checkout, local changes, conflict-checked writeback. No FUSE."""
-import argparse,hashlib,json,os,pathlib,sys,time,urllib.error,urllib.parse,uuid
+import argparse,contextlib,fcntl,functools,hashlib,json,os,pathlib,sys,time,urllib.error,urllib.parse,uuid
 from gateway import Gateway,relative
 P=pathlib.Path
 SKIP_DIR={'.git','node_modules','__pycache__','.cache'}
 SENSITIVE={'auth.json','rclone.conf','rclone-cn.conf','id_rsa','id_ed25519'}
 def digest(b):return hashlib.sha256(b).hexdigest()
+
+@contextlib.contextmanager
+def controller_lock(base):
+ """Serialize writers to a controller; this does not lock other iCloud devices."""
+ base.mkdir(parents=True,exist_ok=True,mode=0o700)
+ fd=os.open(base/'writeback.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+ try:
+  fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+  yield
+ finally:os.close(fd)
+
+def locked_workspace(fn):
+ @functools.wraps(fn)
+ def wrapped(g,base,*args,**kwargs):
+  with controller_lock(base):return fn(g,base,*args,**kwargs)
+ return wrapped
 def canonical(s):
  s=s.strip('/')
  relative(s)
@@ -69,8 +85,12 @@ def save_state(base,state):
   backup=base/'manifest-backups';backup.mkdir(mode=0o700,exist_ok=True)
   (backup/(stamp+'.json')).write_bytes(p.read_bytes())
  temp=base/('manifest-'+stamp+'.tmp')
- with temp.open('x') as f:os.chmod(temp,0o600);json.dump(state,f,ensure_ascii=False,indent=2)
+ with temp.open('x') as f:
+  os.chmod(temp,0o600);json.dump(state,f,ensure_ascii=False,indent=2);f.flush();os.fsync(f.fileno())
  os.replace(temp,p)
+ fd=os.open(base,os.O_RDONLY)
+ try:os.fsync(fd)
+ finally:os.close(fd)
 
 def open_workspace(g,folder,base,max_files,max_bytes):
  folder=canonical(folder);base=base.resolve()
@@ -78,7 +98,7 @@ def open_workspace(g,folder,base,max_files,max_bytes):
   state=load_state(base)
   if state['remote_folder']!=folder:raise ValueError('Existing workspace belongs to another folder')
   g.listing(folder+'/' if folder else '',depth='0')
-  return {'workspace':str(base/'files'),'mode':'checkout-and-writeback','reused':True,'files':len(state['files'])}
+  return {'controller':str(base),'workspace':str(base/'files'),'mode':'checkout-and-writeback','reused':True,'files':len(state['files'])}
  if base.exists() and any(base.iterdir()):raise ValueError('Destination is not empty; preserve it and choose another workspace')
  files,dirs,excluded=list_tree(g,folder,max_files,max_bytes)
  base.mkdir(parents=True,exist_ok=True,mode=0o700);(base/'files').mkdir(mode=0o700,exist_ok=True)
@@ -88,7 +108,7 @@ def open_workspace(g,folder,base,max_files,max_bytes):
  for rel in sorted(files):
   info=download(g,join(folder,rel),base/'files'/rel,max_bytes-used);used+=info['bytes'];state['files'][rel]=info
  save_state(base,state)
- return {'workspace':str(base/'files'),'mode':'checkout-and-writeback','files':len(files),'bytes':used,'excluded':excluded}
+ return {'controller':str(base),'workspace':str(base/'files'),'mode':'checkout-and-writeback','files':len(files),'bytes':used,'excluded':excluded}
 
 def load_state(base):
  state_path=base/'manifest.json'
@@ -127,46 +147,93 @@ def ensure_parents(g,remote):
    entries=g.listing(path,depth='0')
    if not entries or not entries[0]['directory']:raise ValueError('Parent is not a directory')
 
-def push(g,base,authorized,approved_plan,allow_trash=False):
+class WritebackError(ValueError):
+ def __init__(self,stage,path,cause,journal,verified):
+  self.stage,self.path,self.cause_type=stage,path,type(cause).__name__
+  self.journal,self.verified=str(journal),verified
+  self.http_status=cause.code if isinstance(cause,urllib.error.HTTPError) else None
+  super().__init__('Writeback stopped during '+stage+' for '+path+'; preserve local files and inspect the remote version before retrying')
+ def report(self):
+  return {'error':'WritebackError','stage':self.stage,'path':self.path,'cause_type':self.cause_type,
+          'http_status':self.http_status,'verified_files':self.verified,'journal':self.journal,
+          'remote_outcome_unconfirmed':self.stage in ('upload','verify','trash','verify-trash'),
+          'message':str(self)}
+
+@locked_workspace
+def push(g,base,authorized,approved_plan,allow_trash=False,progress=None):
  if not authorized:raise ValueError('Explicit authorization required before writeback')
  proposed=plan(base)
  if proposed['plan_sha256']!=approved_plan:raise ValueError('Plan changed; review the new plan')
  if any(x['action']=='trash' for x in proposed['changes']) and not allow_trash:raise ValueError('Deleted local files require explicit Trash authorization; no writes performed')
- state=load_state(base);backup=base/'remote-backups'/str(uuid.uuid4());conflicts=[]
+ state=load_state(base);run=str(uuid.uuid4());backup=base/'remote-backups'/run;conflicts=[];complete={}
+ journal_dir=base/'writeback-journal'
+ if journal_dir.is_symlink():raise ValueError('Symlinked journal directory is not supported')
+ journal_dir.mkdir(mode=0o700,exist_ok=True);journal=journal_dir/(run+'.jsonl')
+ with journal.open('x') as f:os.chmod(journal,0o600)
+ results=[]
+ def record(stage,path,**extra):
+  event={'stage':stage,'path':path,'time':time.time(),**extra}
+  with journal.open('a') as f:
+   f.write(json.dumps(event,ensure_ascii=False)+'\n');f.flush();os.fsync(f.fileno())
+  if progress:progress(event)
  # Check every existing remote version before the first write. This is not an atomic lock against other iCloud clients.
  for c in proposed['changes']:
   remote=join(state['remote_folder'],c['path'])
+  record('preflight',c['path'],before=c['before'],after=c['after'])
   try:
-   current=download(g,remote,backup/c['path'],state['max_bytes'])
-  except urllib.error.HTTPError as e:
-   if e.code!=404:raise
-   current=None
-  if (current or {}).get('sha256')!=c['before']:conflicts.append(c['path'])
- if conflicts:raise ValueError('Remote conflict; no writes performed: '+json.dumps(conflicts,ensure_ascii=False))
- results=[]
- for c in proposed['changes']:
-  remote=join(state['remote_folder'],c['path'])
-  if c['action']=='trash':
-   with g.req('DELETE',remote) as response:
-    if response.status not in (200,204):raise ValueError('Unexpected Trash response')
-   try:
-    with g.req('HEAD',remote):pass
+   try:current=download(g,remote,backup/c['path'],state['max_bytes'])
    except urllib.error.HTTPError as e:
     if e.code!=404:raise
-   else:raise ValueError('File still exists after Trash')
-   state['files'].pop(c['path'])
-  else:
-   source=base/'files'/c['path'];payload=source.read_bytes()
-   if digest(payload)!=c['after']:raise ValueError('Local file changed after plan review')
-   if len(payload)>32*1024*1024:raise ValueError('Per-file upload limit is 32 MiB')
-   ensure_parents(g,remote)
-   with g.req('PUT',remote,data=payload,headers={'Content-Type':'application/octet-stream'}) as response:
-    if response.status not in (200,201,204):raise ValueError('Unexpected upload response')
-   verified=download(g,remote,base/'verification'/str(uuid.uuid4())/c['path'],state['max_bytes'])
-   if verified['sha256']!=c['after']:raise ValueError('Remote SHA-256 verification failed')
-   state['files'][c['path']]=verified
-  save_state(base,state);results.append({'path':c['path'],'action':c['action'],'verified':True})
- return {'applied':results,'mode':'checkout-and-writeback','backup':str(backup)}
+    current=None
+  except (OSError,ValueError) as e:
+   record('failed',c['path'],during='preflight',cause_type=type(e).__name__)
+   raise WritebackError('preflight',c['path'],e,journal,len(results)) from e
+  actual=(current or {}).get('sha256')
+  # A previous PUT may have completed even if its response/readback timed out.
+  # Adopt only the complete desired hash; zero-byte/partial/other edits remain conflicts.
+  if actual==c['after']:complete[c['path']]=current
+  elif actual!=c['before']:conflicts.append(c['path'])
+ if conflicts:raise ValueError('Remote conflict; no writes performed: '+json.dumps(conflicts,ensure_ascii=False))
+ for c in proposed['changes']:
+  remote=join(state['remote_folder'],c['path'])
+  stage='local-check';recovered=c['path'] in complete
+  try:
+   if c['action']=='trash':
+    if not recovered:
+     stage='trash';record(stage,c['path'])
+     with g.req('DELETE',remote) as response:
+      if response.status not in (200,204):raise ValueError('Unexpected Trash response')
+     stage='verify-trash'
+     try:
+      with g.req('HEAD',remote):pass
+     except urllib.error.HTTPError as e:
+      if e.code!=404:raise
+     else:raise ValueError('File still exists after Trash')
+    state['files'].pop(c['path'],None)
+   else:
+    source=local_target(base,c['path']);payload=source.read_bytes()
+    if digest(payload)!=c['after']:raise ValueError('Local file changed after plan review')
+    if len(payload)>32*1024*1024:raise ValueError('Per-file upload limit is 32 MiB')
+    if recovered:verified=complete[c['path']]
+    else:
+     stage='mkdir';record(stage,c['path']);ensure_parents(g,remote)
+     stage='upload';record(stage,c['path'],bytes=len(payload),before=c['before'],after=c['after'])
+     if hasattr(g,'upload'):
+      g.upload(remote,payload,c['before'],progress=lambda value:record('transfer',c['path'],progress=value))
+     else:
+      with g.req('PUT',remote,data=payload,headers={'Content-Type':'application/octet-stream'}) as response:
+       if response.status not in (200,201,204):raise ValueError('Unexpected upload response')
+     stage='verify';record(stage,c['path'])
+     verified=download(g,remote,base/'verification'/str(uuid.uuid4())/c['path'],state['max_bytes'])
+     if verified['sha256']!=c['after']:raise ValueError('Remote SHA-256 verification failed')
+    state['files'][c['path']]=verified
+   stage='save-state';save_state(base,state)
+   results.append({'path':c['path'],'action':c['action'],'verified':True,'recovered':recovered})
+   record('recovered' if recovered else 'verified',c['path'],after=c['after'])
+  except (OSError,ValueError) as e:
+   record('failed',c['path'],during=stage,cause_type=type(e).__name__)
+   raise WritebackError(stage,c['path'],e,journal,len(results)) from e
+ return {'applied':results,'mode':'checkout-and-writeback','backup':str(backup),'journal':str(journal)}
 
 def selection(g):
  with g.req('GET','__codex_gateway_v1__/selection') as response:
@@ -220,6 +287,7 @@ def local_target(base,rel):
  if not target.resolve().is_relative_to(root.resolve()):raise ValueError('File escaped workspace')
  return target
 
+@locked_workspace
 def fetch(g,base,paths,max_files=1000,max_bytes=256*1024*1024):
  base=base.resolve();state=load_state(base);wanted={}
  if max_files<=0 or max_bytes<=0:raise ValueError('Positive fetch limits required')
@@ -283,10 +351,18 @@ def main():
   base=a.workspace or P.cwd()/'work/icloud-workspaces'/digest(canonical(a.folder).encode())[:12]
   result=open_workspace(Gateway(),a.folder,base,a.max_files,a.max_bytes) if a.checkout else demand_workspace(Gateway(),a.folder,base,a.max_bytes)
  elif a.command=='plan':result=plan(a.workspace.resolve())
- else:result=push(Gateway(),a.workspace.resolve(),a.authorized,a.plan_sha256,a.allow_trash)
+ else:result=push(Gateway(),a.workspace.resolve(),a.authorized,a.plan_sha256,a.allow_trash,
+                  progress=lambda event:print(json.dumps({'writeback':event},ensure_ascii=False),file=sys.stderr,flush=True))
+ if a.command in ('activate','open') and result.get('controller'):
+  controller=P(result['controller'])
+  if (controller/'autosave/config.json').exists():
+   import autosave
+   try:result['autosave']=autosave.start(controller)
+   except (ValueError,OSError) as error:result['autosave']={'error':autosave.error_report(error),'resumed':False}
  print(json.dumps(result,ensure_ascii=False,indent=2))
 if __name__=='__main__':
  try:main()
+ except WritebackError as e:print(json.dumps(e.report(),ensure_ascii=False),file=sys.stderr);sys.exit(1)
  except urllib.error.HTTPError as e:print(json.dumps({'error':'HTTP','status':e.code}),file=sys.stderr);sys.exit(1)
  except urllib.error.URLError as e:print(json.dumps({'error':'Network','type':type(e.reason).__name__}),file=sys.stderr);sys.exit(1)
  except (ValueError,OSError) as e:print(json.dumps({'error':type(e).__name__,'message':str(e)},ensure_ascii=False),file=sys.stderr);sys.exit(1)
